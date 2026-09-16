@@ -84,6 +84,7 @@ function App() {
       dc.send(JSON.stringify({
         type: 'session.update',
         session: {
+          type: 'realtime',
           instructions: translationInstructions(),
           input_audio_transcription: { model: 'gpt-realtime-whisper' },
           turn_detection: {
@@ -177,7 +178,7 @@ function App() {
         <div><span>Original</span><p>{original}</p></div>
         <div><span>Traducción</span><p>{translation || 'Traduciendo…'}</p></div>
       </section>
-      <footer>V0.2 · Realtime WebRTC</footer>
+      <footer>V0.2.1 · Realtime WebRTC</footer>
     </main>
   );
 }
