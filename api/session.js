@@ -1,5 +1,5 @@
-// Server-side endpoint for creating a short-lived OpenAI Realtime session.
-// OPENAI_API_KEY must exist only as a server environment variable.
+// Server-side endpoint for creating a short-lived OpenAI Realtime Translation session.
+// OPENAI_API_KEY stays only on the server.
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -7,14 +7,12 @@ export default async function handler(req, res) {
   }
 
   if (!process.env.OPENAI_API_KEY) {
-    return res.status(503).json({
-      error: 'OPENAI_API_KEY is not configured yet',
-      setupRequired: true,
-    });
+    return res.status(503).json({ error: 'OPENAI_API_KEY is not configured yet', setupRequired: true });
   }
 
   try {
-    const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+    const targetLanguage = req.body?.targetLanguage || 'es';
+    const response = await fetch('https://api.openai.com/v1/realtime/translations/client_secrets', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -22,8 +20,14 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         session: {
-          type: 'realtime',
           model: 'gpt-realtime-translate',
+          audio: {
+            input: {
+              transcription: { model: 'gpt-realtime-whisper' },
+              noise_reduction: { type: 'near_field' },
+            },
+            output: { language: targetLanguage },
+          },
         },
       }),
     });
@@ -31,6 +35,6 @@ export default async function handler(req, res) {
     const data = await response.json();
     return res.status(response.status).json(data);
   } catch (error) {
-    return res.status(500).json({ error: 'Could not create Realtime session' });
+    return res.status(500).json({ error: 'Could not create Realtime Translation session' });
   }
 }
