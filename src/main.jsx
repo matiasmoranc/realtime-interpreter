@@ -37,10 +37,10 @@ function App() {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
 
-    if (msg.type === 'response.audio_transcript.delta' && msg.delta) {
+    if ((msg.type === 'response.audio_transcript.delta' || msg.type === 'response.output_audio_transcript.delta') && msg.delta) {
       setTranslation((prev) => (prev === 'La traducción en vivo aparecerá aquí.' ? '' : prev) + msg.delta);
     }
-    if (msg.type === 'response.audio_transcript.done' && msg.transcript) {
+    if ((msg.type === 'response.audio_transcript.done' || msg.type === 'response.output_audio_transcript.done') && msg.transcript) {
       setTranslation(msg.transcript);
     }
     if (msg.type === 'error') {
@@ -83,13 +83,6 @@ function App() {
         session: {
           type: 'realtime',
           instructions: translationInstructions(),
-          turn_detection: {
-            type: 'server_vad',
-            threshold: 0.45,
-            prefix_padding_ms: 250,
-            silence_duration_ms: 350,
-            create_response: true,
-          },
         },
       }));
       setMeetingOn(true);
@@ -174,7 +167,7 @@ function App() {
         <div><span>Original</span><p>{original}</p></div>
         <div><span>Traducción</span><p>{translation || 'Traduciendo…'}</p></div>
       </section>
-      <footer>V0.2.2 · Realtime WebRTC</footer>
+      <footer>V0.2.3 · Realtime WebRTC</footer>
     </main>
   );
 }
