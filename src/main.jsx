@@ -13,7 +13,7 @@ function App() {
   const [from, setFrom] = useState('en');
   const [to, setTo] = useState('es');
   const [status, setStatus] = useState('Listo para conectar');
-  const [original, setOriginal] = useState('El texto reconocido aparecerá aquí.');
+  const [original] = useState('La transcripción del audio se agregará después.');
   const [translation, setTranslation] = useState('La traducción en vivo aparecerá aquí.');
 
   const pcRef = useRef(null);
@@ -37,9 +37,6 @@ function App() {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
 
-    if (msg.type === 'conversation.item.input_audio_transcription.completed' && msg.transcript) {
-      setOriginal(msg.transcript);
-    }
     if (msg.type === 'response.audio_transcript.delta' && msg.delta) {
       setTranslation((prev) => (prev === 'La traducción en vivo aparecerá aquí.' ? '' : prev) + msg.delta);
     }
@@ -86,7 +83,6 @@ function App() {
         session: {
           type: 'realtime',
           instructions: translationInstructions(),
-          input_audio_transcription: { model: 'gpt-realtime-whisper' },
           turn_detection: {
             type: 'server_vad',
             threshold: 0.45,
@@ -178,7 +174,7 @@ function App() {
         <div><span>Original</span><p>{original}</p></div>
         <div><span>Traducción</span><p>{translation || 'Traduciendo…'}</p></div>
       </section>
-      <footer>V0.2.1 · Realtime WebRTC</footer>
+      <footer>V0.2.2 · Realtime WebRTC</footer>
     </main>
   );
 }
