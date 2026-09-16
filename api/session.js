@@ -24,7 +24,9 @@ export default async function handler(req, res) {
           audio: {
             input: {
               transcription: { model: 'gpt-realtime-whisper' },
-              noise_reduction: { type: 'near_field' },
+              // The iPhone is listening to meeting audio coming from another device,
+              // so this is a far-field source rather than a close-talking headset mic.
+              noise_reduction: { type: 'far_field' },
             },
             output: { language: targetLanguage },
           },
