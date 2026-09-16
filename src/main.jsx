@@ -92,8 +92,14 @@ function App() {
     const [listenSecret, talkSecret] = await Promise.all([getSecret(to), getSecret(from)]);
 
     setStatus('Solicitando micrófono…');
+    // This mic is capturing another device / meeting speaker. Browser voice processing
+    // can mistake that continuous external speech for echo/noise and suppress it.
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
     });
     streamRef.current = stream;
     const micTrack = stream.getAudioTracks()[0];
@@ -109,10 +115,8 @@ function App() {
     talkAudio.volume = 1;
     talkAudioRef.current = talkAudio;
 
-    // Main channel remains active continuously: meeting audio -> Spanish.
     listenPcRef.current = await createTranslationPeer(listenSecret, micTrack, handleListenEvent, listenAudio);
 
-    // Independent PTT channel. A cloned mic track can be enabled without interrupting the meeting channel.
     const talkTrack = micTrack.clone();
     talkTrack.enabled = false;
     talkTrackRef.current = talkTrack;
@@ -179,7 +183,7 @@ function App() {
           <small>Inglés → español continuo en tus auriculares</small>
         </button>
         <button className={`talk ${speaking ? 'pressed' : ''}`} disabled={!meetingOn}
-          onPointerDown={startTalk} onPointerUp={stopTalk} onPointerCancel={stopTalk} onPointerLeave={speaking ? stopTalk : undefined}>
+          onPointerDown={startTalk} onPointerUp={stopTalk} onPointerCancel={stopTalk}>
           <span className="mic">●</span><span>{speaking ? 'Traduciendo al inglés…' : 'Mantener para hablar'}</span>
           <small>Español → inglés · no detiene la escucha</small>
         </button>
@@ -188,7 +192,7 @@ function App() {
         <div><span>Original reunión</span><p>{original}</p></div>
         <div><span>Traducción al español</span><p>{translation}</p></div>
       </section>
-      <footer>V0.4 · Traducción bidireccional</footer>
+      <footer>V0.5 · Captura continua</footer>
     </main>
   );
 }
