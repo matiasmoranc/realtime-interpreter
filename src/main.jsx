@@ -16,10 +16,13 @@ function App() {
   const [original, setOriginal] = useState('El texto original aparecerá aquí.');
   const [translation, setTranslation] = useState('La traducción en vivo aparecerá aquí.');
 
-  const pcRef = useRef(null);
   const streamRef = useRef(null);
-  const dcRef = useRef(null);
-  const audioRef = useRef(null);
+  const listenPcRef = useRef(null);
+  const talkPcRef = useRef(null);
+  const talkTrackRef = useRef(null);
+  const listenAudioRef = useRef(null);
+  const talkAudioRef = useRef(null);
+
   const direction = useMemo(() => `${LANGS[from].short} → ${LANGS[to].short}`, [from, to]);
 
   function swap() {
@@ -28,7 +31,7 @@ function App() {
     setTo(from);
   }
 
-  function handleEvent(event) {
+  function handleListenEvent(event) {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
 
@@ -44,73 +47,93 @@ function App() {
     if ((msg.type === 'session.output_transcript.completed' || msg.type === 'session.output_transcript.done') && msg.transcript) {
       setTranslation(msg.transcript);
     }
-    if (msg.type === 'error') {
-      setStatus(`Error Realtime: ${msg.error?.message || 'desconocido'}`);
-    }
+    if (msg.type === 'error') setStatus(`Error Realtime: ${msg.error?.message || 'desconocido'}`);
+  }
+
+  async function getSecret(targetLanguage) {
+    const response = await fetch('/api/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetLanguage }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || data.error || 'No se pudo crear la sesión');
+    const candidate = data.client_secret || data.value || data.client_secret?.value;
+    const secret = typeof candidate === 'string' ? candidate : candidate?.value;
+    if (!secret) throw new Error('El servidor no devolvió una credencial temporal');
+    return secret;
+  }
+
+  async function createTranslationPeer(secret, track, onMessage, audio) {
+    const pc = new RTCPeerConnection();
+    const stream = new MediaStream([track]);
+    pc.addTrack(track, stream);
+    pc.ontrack = ({ streams }) => {
+      audio.srcObject = streams[0];
+      audio.play().catch(() => {});
+    };
+    const dc = pc.createDataChannel('oai-events');
+    if (onMessage) dc.addEventListener('message', onMessage);
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const response = await fetch('https://api.openai.com/v1/realtime/translations/calls', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/sdp' },
+      body: offer.sdp,
+    });
+    if (!response.ok) throw new Error(await response.text());
+    await pc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+    return pc;
   }
 
   async function connect() {
-    setStatus('Creando sesión de traducción…');
-    const tokenRes = await fetch('/api/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetLanguage: to }),
-    });
-    const tokenData = await tokenRes.json();
-    if (!tokenRes.ok) throw new Error(tokenData.error?.message || tokenData.error || 'No se pudo crear la sesión');
-
-    const ephemeralKey = tokenData.client_secret || tokenData.value || tokenData.client_secret?.value;
-    const secret = typeof ephemeralKey === 'string' ? ephemeralKey : ephemeralKey?.value;
-    if (!secret) throw new Error('El servidor no devolvió una credencial temporal');
+    setStatus('Preparando traducción bidireccional…');
+    const [listenSecret, talkSecret] = await Promise.all([getSecret(to), getSecret(from)]);
 
     setStatus('Solicitando micrófono…');
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     streamRef.current = stream;
+    const micTrack = stream.getAudioTracks()[0];
 
-    const pc = new RTCPeerConnection();
-    pcRef.current = pc;
+    const listenAudio = new Audio();
+    listenAudio.autoplay = true;
+    listenAudio.playsInline = true;
+    listenAudioRef.current = listenAudio;
 
-    const audio = new Audio();
-    audio.autoplay = true;
-    audio.playsInline = true;
-    audioRef.current = audio;
-    pc.ontrack = ({ streams }) => {
-      audio.srcObject = streams[0];
-      audio.play().catch(() => {});
-    };
+    const talkAudio = new Audio();
+    talkAudio.autoplay = true;
+    talkAudio.playsInline = true;
+    talkAudio.volume = 1;
+    talkAudioRef.current = talkAudio;
 
-    for (const track of stream.getAudioTracks()) pc.addTrack(track, stream);
+    // Main channel remains active continuously: meeting audio -> Spanish.
+    listenPcRef.current = await createTranslationPeer(listenSecret, micTrack, handleListenEvent, listenAudio);
 
-    const dc = pc.createDataChannel('oai-events');
-    dcRef.current = dc;
-    dc.addEventListener('message', handleEvent);
-    dc.addEventListener('open', () => {
-      setMeetingOn(true);
-      setStatus('Traduciendo en vivo · reproducí inglés cerca del teléfono');
-    });
+    // Independent PTT channel. A cloned mic track can be enabled without interrupting the meeting channel.
+    const talkTrack = micTrack.clone();
+    talkTrack.enabled = false;
+    talkTrackRef.current = talkTrack;
+    talkPcRef.current = await createTranslationPeer(talkSecret, talkTrack, null, talkAudio);
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    const sdpRes = await fetch('https://api.openai.com/v1/realtime/translations/calls', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/sdp' },
-      body: offer.sdp,
-    });
-    if (!sdpRes.ok) throw new Error(await sdpRes.text());
-    await pc.setRemoteDescription({ type: 'answer', sdp: await sdpRes.text() });
+    setMeetingOn(true);
+    setStatus('Traducción continua activa · mantené el botón rojo para hablar en español');
   }
 
   function disconnect() {
-    dcRef.current?.close();
-    pcRef.current?.close();
+    listenPcRef.current?.close();
+    talkPcRef.current?.close();
+    talkTrackRef.current?.stop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
-    if (audioRef.current) audioRef.current.srcObject = null;
-    dcRef.current = null;
-    pcRef.current = null;
+    if (listenAudioRef.current) listenAudioRef.current.srcObject = null;
+    if (talkAudioRef.current) talkAudioRef.current.srcObject = null;
+    listenPcRef.current = null;
+    talkPcRef.current = null;
+    talkTrackRef.current = null;
     streamRef.current = null;
+    setSpeaking(false);
     setMeetingOn(false);
     setStatus('Listo para conectar');
   }
@@ -121,8 +144,18 @@ function App() {
     catch (error) { disconnect(); setStatus(`No se pudo conectar: ${error.message}`); }
   }
 
-  function startTalk() { setSpeaking(true); }
-  function stopTalk() { setSpeaking(false); }
+  function startTalk() {
+    if (!meetingOn || !talkTrackRef.current) return;
+    talkTrackRef.current.enabled = true;
+    setSpeaking(true);
+    setStatus('ES → EN activo · seguí manteniendo para hablar');
+  }
+
+  function stopTalk() {
+    if (talkTrackRef.current) talkTrackRef.current.enabled = false;
+    setSpeaking(false);
+    setStatus('Traducción continua activa · mantené el botón rojo para hablar en español');
+  }
 
   return (
     <main className="shell">
@@ -143,19 +176,19 @@ function App() {
         <button className={`listen ${meetingOn ? 'active' : ''}`} onClick={toggleMeeting}>
           <span className="icon">{meetingOn ? '■' : '▶'}</span>
           <span>{meetingOn ? 'Detener escucha' : 'Escuchar reunión'}</span>
-          <small>{LANGS[from].name} → {LANGS[to].name} en tus auriculares</small>
+          <small>Inglés → español continuo en tus auriculares</small>
         </button>
         <button className={`talk ${speaking ? 'pressed' : ''}`} disabled={!meetingOn}
-          onPointerDown={startTalk} onPointerUp={stopTalk} onPointerCancel={stopTalk}>
-          <span className="mic">●</span><span>{speaking ? 'Hablando…' : 'Mantener para hablar'}</span>
-          <small>Salida a Cisco se agrega después</small>
+          onPointerDown={startTalk} onPointerUp={stopTalk} onPointerCancel={stopTalk} onPointerLeave={speaking ? stopTalk : undefined}>
+          <span className="mic">●</span><span>{speaking ? 'Traduciendo al inglés…' : 'Mantener para hablar'}</span>
+          <small>Español → inglés · no detiene la escucha</small>
         </button>
       </section>
       <section className="transcript">
-        <div><span>Original</span><p>{original}</p></div>
-        <div><span>Traducción</span><p>{translation}</p></div>
+        <div><span>Original reunión</span><p>{original}</p></div>
+        <div><span>Traducción al español</span><p>{translation}</p></div>
       </section>
-      <footer>V0.3 · Realtime Translation</footer>
+      <footer>V0.4 · Traducción bidireccional</footer>
     </main>
   );
 }
