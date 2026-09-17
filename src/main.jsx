@@ -15,6 +15,7 @@ function App() {
   const [status, setStatus] = useState('Listo para conectar');
   const [original, setOriginal] = useState('El texto original aparecerá aquí.');
   const [translation, setTranslation] = useState('La traducción en vivo aparecerá aquí.');
+  const [streamHealth, setStreamHealth] = useState('');
 
   const streamRef = useRef(null);
   const listenPcRef = useRef(null);
@@ -22,6 +23,9 @@ function App() {
   const talkTrackRef = useRef(null);
   const listenAudioRef = useRef(null);
   const talkAudioRef = useRef(null);
+  const lastInputRef = useRef(0);
+  const lastOutputRef = useRef(0);
+  const healthTimerRef = useRef(null);
 
   const direction = useMemo(() => `${LANGS[from].short} → ${LANGS[to].short}`, [from, to]);
 
@@ -31,23 +35,30 @@ function App() {
     setTo(from);
   }
 
+  function appendText(setter, placeholder, delta) {
+    setter((prev) => {
+      const base = prev === placeholder ? '' : prev;
+      return (base + delta).slice(-5000);
+    });
+  }
+
   function handleListenEvent(event) {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
 
+    // Translation sessions are continuous. Deltas are the authoritative live stream;
+    // do not replace the accumulated text when a completed segment arrives.
     if (msg.type === 'session.input_transcript.delta' && msg.delta) {
-      setOriginal((prev) => (prev === 'El texto original aparecerá aquí.' ? '' : prev) + msg.delta);
-    }
-    if ((msg.type === 'session.input_transcript.completed' || msg.type === 'session.input_transcript.done') && msg.transcript) {
-      setOriginal(msg.transcript);
+      lastInputRef.current = Date.now();
+      appendText(setOriginal, 'El texto original aparecerá aquí.', msg.delta);
     }
     if (msg.type === 'session.output_transcript.delta' && msg.delta) {
-      setTranslation((prev) => (prev === 'La traducción en vivo aparecerá aquí.' ? '' : prev) + msg.delta);
+      lastOutputRef.current = Date.now();
+      appendText(setTranslation, 'La traducción en vivo aparecerá aquí.', msg.delta);
     }
-    if ((msg.type === 'session.output_transcript.completed' || msg.type === 'session.output_transcript.done') && msg.transcript) {
-      setTranslation(msg.transcript);
+    if (msg.type === 'error') {
+      setStatus(`Error Realtime: ${msg.error?.message || 'desconocido'}`);
     }
-    if (msg.type === 'error') setStatus(`Error Realtime: ${msg.error?.message || 'desconocido'}`);
   }
 
   async function getSecret(targetLanguage) {
@@ -87,22 +98,33 @@ function App() {
     return pc;
   }
 
+  function startHealthMonitor(track, pc) {
+    clearInterval(healthTimerRef.current);
+    healthTimerRef.current = setInterval(() => {
+      if (!track || !pc) return;
+      const connected = pc.connectionState === 'connected';
+      const micLive = track.readyState === 'live' && !track.muted && track.enabled;
+      const now = Date.now();
+      const inputAge = lastInputRef.current ? Math.round((now - lastInputRef.current) / 1000) : null;
+      const outputAge = lastOutputRef.current ? Math.round((now - lastOutputRef.current) / 1000) : null;
+      setStreamHealth(`Mic ${micLive ? 'OK' : 'PAUSADO'} · WebRTC ${connected ? 'OK' : pc.connectionState}${inputAge !== null ? ` · entrada ${inputAge}s` : ''}${outputAge !== null ? ` · traducción ${outputAge}s` : ''}`);
+    }, 1000);
+  }
+
   async function connect() {
     setStatus('Preparando traducción bidireccional…');
     const [listenSecret, talkSecret] = await Promise.all([getSecret(to), getSecret(from)]);
 
     setStatus('Solicitando micrófono…');
-    // This mic is capturing another device / meeting speaker. Browser voice processing
-    // can mistake that continuous external speech for echo/noise and suppress it.
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
     streamRef.current = stream;
     const micTrack = stream.getAudioTracks()[0];
+
+    micTrack.onmute = () => setStatus('El iPhone pausó el micrófono');
+    micTrack.onunmute = () => setStatus('Traducción continua activa · mantené el botón rojo para hablar en español');
+    micTrack.onended = () => setStatus('El micrófono se detuvo');
 
     const listenAudio = new Audio();
     listenAudio.autoplay = true;
@@ -122,11 +144,16 @@ function App() {
     talkTrackRef.current = talkTrack;
     talkPcRef.current = await createTranslationPeer(talkSecret, talkTrack, null, talkAudio);
 
+    lastInputRef.current = 0;
+    lastOutputRef.current = 0;
+    startHealthMonitor(micTrack, listenPcRef.current);
     setMeetingOn(true);
-    setStatus('Traducción continua activa · mantené el botón rojo para hablar en español');
+    setStatus('Traducción continua activa · usá auriculares para evitar que el español vuelva al micrófono');
   }
 
   function disconnect() {
+    clearInterval(healthTimerRef.current);
+    healthTimerRef.current = null;
     listenPcRef.current?.close();
     talkPcRef.current?.close();
     talkTrackRef.current?.stop();
@@ -139,6 +166,7 @@ function App() {
     streamRef.current = null;
     setSpeaking(false);
     setMeetingOn(false);
+    setStreamHealth('');
     setStatus('Listo para conectar');
   }
 
@@ -158,7 +186,7 @@ function App() {
   function stopTalk() {
     if (talkTrackRef.current) talkTrackRef.current.enabled = false;
     setSpeaking(false);
-    setStatus('Traducción continua activa · mantené el botón rojo para hablar en español');
+    setStatus('Traducción continua activa · usá auriculares para evitar retorno de audio');
   }
 
   return (
@@ -170,6 +198,7 @@ function App() {
       </header>
       <section className="status-card">
         <span className="eyebrow">ESTADO</span><strong>{status}</strong><span className="direction">{direction}</span>
+        {meetingOn && streamHealth && <small style={{display:'block', marginTop:8, opacity:.7}}>{streamHealth}</small>}
       </section>
       <section className="languages">
         <div className="lang"><span>Escucho</span><strong>{LANGS[from].flag} {LANGS[from].name}</strong></div>
@@ -192,7 +221,7 @@ function App() {
         <div><span>Original reunión</span><p>{original}</p></div>
         <div><span>Traducción al español</span><p>{translation}</p></div>
       </section>
-      <footer>V0.5 · Captura continua</footer>
+      <footer>V0.6 · Stream monitor</footer>
     </main>
   );
 }
