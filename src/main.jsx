@@ -18,6 +18,7 @@ function App() {
   const [streamHealth, setStreamHealth] = useState('');
 
   const streamRef = useRef(null);
+  const systemStreamRef = useRef(null);
   const listenPcRef = useRef(null);
   const talkPcRef = useRef(null);
   const talkTrackRef = useRef(null);
@@ -115,20 +116,31 @@ function App() {
     setStatus('Preparando traducción bidireccional…');
     const [listenSecret, talkSecret] = await Promise.all([getSecret(to), getSecret(from)]);
 
-    setStatus('Solicitando micrófono…');
+    setStatus('Elegí la pantalla o ventana de la reunión y activá «Compartir audio»…');
+    const systemStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    systemStreamRef.current = systemStream;
+    const meetingTrack = systemStream.getAudioTracks()[0];
+    if (!meetingTrack) {
+      systemStream.getTracks().forEach((track) => track.stop());
+      systemStreamRef.current = null;
+      throw new Error('No se compartió audio. Volvé a intentar y activá «Compartir audio» en el selector de Windows.');
+    }
+
+    setStatus('Solicitando micrófono para ES → EN…');
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     streamRef.current = stream;
     const micTrack = stream.getAudioTracks()[0];
 
-    micTrack.onmute = () => setStatus('El iPhone pausó el micrófono');
-    micTrack.onunmute = () => setStatus('Traducción continua activa · mantené el botón rojo para hablar en español');
-    micTrack.onended = () => setStatus('El micrófono se detuvo');
+    meetingTrack.onended = () => disconnect();
 
     const listenAudio = new Audio();
     listenAudio.autoplay = true;
     listenAudio.playsInline = true;
+    // Subtitle mode: don't play the translated Spanish back into the system audio,
+    // otherwise system capture can hear itself and create a translation loop.
+    listenAudio.muted = true;
     listenAudioRef.current = listenAudio;
 
     const talkAudio = new Audio();
@@ -137,7 +149,7 @@ function App() {
     talkAudio.volume = 1;
     talkAudioRef.current = talkAudio;
 
-    listenPcRef.current = await createTranslationPeer(listenSecret, micTrack, handleListenEvent, listenAudio);
+    listenPcRef.current = await createTranslationPeer(listenSecret, meetingTrack, handleListenEvent, listenAudio);
 
     const talkTrack = micTrack.clone();
     talkTrack.enabled = false;
@@ -146,9 +158,9 @@ function App() {
 
     lastInputRef.current = 0;
     lastOutputRef.current = 0;
-    startHealthMonitor(micTrack, listenPcRef.current);
+    startHealthMonitor(meetingTrack, listenPcRef.current);
     setMeetingOn(true);
-    setStatus('Traducción continua activa · usá auriculares para evitar que el español vuelva al micrófono');
+    setStatus('Subtítulos EN → ES activos · el audio de la reunión se captura directamente desde Windows');
   }
 
   function disconnect() {
@@ -158,12 +170,14 @@ function App() {
     talkPcRef.current?.close();
     talkTrackRef.current?.stop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
+    systemStreamRef.current?.getTracks().forEach((track) => track.stop());
     if (listenAudioRef.current) listenAudioRef.current.srcObject = null;
     if (talkAudioRef.current) talkAudioRef.current.srcObject = null;
     listenPcRef.current = null;
     talkPcRef.current = null;
     talkTrackRef.current = null;
     streamRef.current = null;
+    systemStreamRef.current = null;
     setSpeaking(false);
     setMeetingOn(false);
     setStreamHealth('');
@@ -186,7 +200,7 @@ function App() {
   function stopTalk() {
     if (talkTrackRef.current) talkTrackRef.current.enabled = false;
     setSpeaking(false);
-    setStatus('Traducción continua activa · usá auriculares para evitar retorno de audio');
+    setStatus('Subtítulos EN → ES activos · audio capturado directamente desde Windows');
   }
 
   return (
@@ -209,7 +223,7 @@ function App() {
         <button className={`listen ${meetingOn ? 'active' : ''}`} onClick={toggleMeeting}>
           <span className="icon">{meetingOn ? '■' : '▶'}</span>
           <span>{meetingOn ? 'Detener escucha' : 'Escuchar reunión'}</span>
-          <small>Inglés → español continuo en tus auriculares</small>
+          <small>Captura el audio de Windows · inglés → subtítulos en español</small>
         </button>
         <button className={`talk ${speaking ? 'pressed' : ''}`} disabled={!meetingOn}
           onPointerDown={startTalk} onPointerUp={stopTalk} onPointerCancel={stopTalk}>
@@ -221,7 +235,7 @@ function App() {
         <div><span>Original reunión</span><p>{original}</p></div>
         <div><span>Traducción al español</span><p>{translation}</p></div>
       </section>
-      <footer>V0.6 · Stream monitor</footer>
+      <footer>V0.7 · Windows system audio + live subtitles</footer>
     </main>
   );
 }
