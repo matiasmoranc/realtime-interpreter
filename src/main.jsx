@@ -63,7 +63,7 @@ function App() {
   }
 
   async function getSecret(targetLanguage) {
-    const response = await fetch('/api/session', {
+    const response = await fetch('https://realtime-interpreter-amber.vercel.app/api/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetLanguage }),
